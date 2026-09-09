@@ -4,12 +4,29 @@
 // taskbar any more. This is the next best thing: a borderless, click-through,
 // always-on-top window positioned over an empty stretch of it.
 //
+// Known and accepted: the strip is not drawn while the Start menu is open,
+// because Windows 11 does not composite ordinary windows over the taskbar's
+// own rectangle then. It is not a z-order bug and it has no fix from an
+// unprivileged process -- see the README for the four routes measured and
+// ruled out. Sitting 48 px higher avoids it, at the cost of overlapping
+// maximised windows, and being on the taskbar is worth more than that.
+//
 // Design notes worth keeping:
 //
-//   * Two small multiples, never a dual-axis chart. Temperature (degC) and fan
-//     speed (RPM) are different measures; drawing them against one y-scale
-//     would make their crossings and relative heights meaningless. Each gets
-//     its own lane, separated by a hairline, sharing only the time axis.
+//   * Temperature and fan speed share one lane, and this is a deliberate
+//     trade rather than an oversight. They are different measures (degC and
+//     RPM), so their crossings and relative heights genuinely mean nothing --
+//     it is a dual-axis chart, with everything that implies. It was measured
+//     before being chosen: over ~80 minutes of real readings the two lines sit
+//     within 3 px of each other, reading as one band, 4.4 % of the time on the
+//     CPU and 20.7 % on the GPU, whose low temperature and low fan percentage
+//     happen to land at the same height. What it buys is the temperature lane
+//     going from 18 px to the full 28 px of the chart, which is most of its
+//     usable resolution.
+//
+//     If you want the unambiguous version back, give the fan its own shorter
+//     lane under a hairline divider and scale each series to its own height:
+//     the change is confined to Sparkline.OnRender and FanY.
 //
 //   * The temperature scale is FIXED at 30-95 degC, not auto-fitted. An
 //     auto-scaled sparkline lies: a flat line at 90 degC looks identical to a
@@ -22,6 +39,10 @@
 //     assuming text will have contrast against it -- an acrylic taskbar shows
 //     the wallpaper through, and a bright wallpaper can leave white text on
 //     near-white pixels.
+//
+//     Going opaque is a tested alternative and does restore ClearType, at the
+//     price of painting a fixed colour over a surface that follows the
+//     wallpaper. Ink.Surface holds the measured value if you want it.
 //
 //   * There is no hover layer, because the window must be click-through or it
 //     would block the taskbar underneath. The current value is therefore
@@ -51,6 +72,11 @@ namespace TaskbarTempWidget
     // If you change these, re-check that the two series stay distinguishable.
     static class Ink
     {
+        // The taskbar's real surface colour under the strip, measured rather
+        // than assumed -- sampling elsewhere on the taskbar reads the icons,
+        // not the background. Unused while the window is transparent; it is
+        // what to paint if you switch to an opaque background to get ClearType.
+        public static readonly Brush Surface   = Solid("#152537");
         public static readonly Brush Primary   = Solid("#ffffff");
         public static readonly Brush Secondary = Solid("#c3c2b7");
         public static readonly Brush Muted     = Solid("#898781");
@@ -68,16 +94,14 @@ namespace TaskbarTempWidget
         }
     }
 
-    // Temperature in the upper lane, fan speed as a dashed line in a shorter
-    // lower lane. Same hue for both, since they describe the same component.
+    // Temperature as a filled line, fan speed as a dashed line over the same
+    // area. Same hue for both, since they describe the same component -- see
+    // the dual-axis trade in the notes at the top of the file.
     class Sparkline : FrameworkElement
     {
         const double TEMP_MIN = 30.0;
         const double TEMP_MAX = 95.0;
         const double TEMP_REF = 80.0;   // reference line, the reading anchor
-
-        const double FAN_LANE = 8.0;
-        const double LANE_GAP = 2.0;
 
         double[] temps = new double[0];
         double[] fan = new double[0];
@@ -88,7 +112,6 @@ namespace TaskbarTempWidget
         readonly Pen ringPen;
         readonly Pen refPen;
         readonly Pen fanPen;
-        readonly Pen dividerPen;
 
         public Sparkline(Color c)
         {
@@ -127,9 +150,6 @@ namespace TaskbarTempWidget
             fanPen.DashStyle = new DashStyle(new double[] { 3, 2 }, 0);
             fanPen.DashCap = PenLineCap.Flat;
             fanPen.Freeze();
-
-            dividerPen = new Pen(Ink.Gridline, 1.0);
-            dividerPen.Freeze();
         }
 
         // temperatures in degC, fanPercent in 0-100
@@ -152,9 +172,12 @@ namespace TaskbarTempWidget
             return laneHeight - Clamp01((degC - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * laneHeight;
         }
 
-        double FanY(double percent, double tempLane, double fanLane)
+        // 0-100 % of the fan's calibrated maximum over the same height the
+        // temperature uses. The two scales are unrelated, which is exactly
+        // what makes this a dual axis.
+        double FanY(double percent, double laneHeight)
         {
-            return tempLane + LANE_GAP + (fanLane - Clamp01(percent / 100.0) * fanLane);
+            return laneHeight - Clamp01(percent / 100.0) * laneHeight;
         }
 
         protected override void OnRender(DrawingContext dc)
@@ -164,34 +187,10 @@ namespace TaskbarTempWidget
             if (w <= 0 || h <= 0) { return; }
 
             double plotWidth = w - 5.0;          // room for the end dot
-            double fanLane = FAN_LANE;
-            double tempLane = h - LANE_GAP - fanLane;
-            if (tempLane < 6) { tempLane = h; fanLane = 0; }   // too short to split
+            double lane = h;                     // one lane, both series
 
-            double yRef = TempY(TEMP_REF, tempLane);
+            double yRef = TempY(TEMP_REF, lane);
             dc.DrawLine(refPen, new Point(0, yRef), new Point(w, yRef));
-
-            if (fanLane > 0)
-            {
-                double yDiv = tempLane + LANE_GAP / 2.0;
-                dc.DrawLine(dividerPen, new Point(0, yDiv), new Point(w, yDiv));
-            }
-
-            if (fanLane > 0 && fan.Length >= 2)
-            {
-                StreamGeometry gf = new StreamGeometry();
-                double step = plotWidth / (fan.Length - 1);
-                using (StreamGeometryContext ctx = gf.Open())
-                {
-                    ctx.BeginFigure(new Point(0, FanY(fan[0], tempLane, fanLane)), false, false);
-                    for (int i = 1; i < fan.Length; i++)
-                    {
-                        ctx.LineTo(new Point(i * step, FanY(fan[i], tempLane, fanLane)), true, false);
-                    }
-                }
-                gf.Freeze();
-                dc.DrawGeometry(null, fanPen, gf);
-            }
 
             if (temps.Length < 2) { return; }
 
@@ -203,17 +202,17 @@ namespace TaskbarTempWidget
             {
                 using (StreamGeometryContext ca = area.Open())
                 {
-                    Point first = new Point(0, TempY(temps[0], tempLane));
+                    Point first = new Point(0, TempY(temps[0], lane));
                     cl.BeginFigure(first, false, false);
-                    ca.BeginFigure(new Point(0, tempLane), true, true);
+                    ca.BeginFigure(new Point(0, lane), true, true);
                     ca.LineTo(first, true, false);
                     for (int i = 1; i < temps.Length; i++)
                     {
-                        Point p = new Point(i * dx, TempY(temps[i], tempLane));
+                        Point p = new Point(i * dx, TempY(temps[i], lane));
                         cl.LineTo(p, true, true);
                         ca.LineTo(p, true, false);
                     }
-                    ca.LineTo(new Point(plotWidth, tempLane), true, false);
+                    ca.LineTo(new Point(plotWidth, lane), true, false);
                 }
             }
             line.Freeze();
@@ -222,7 +221,26 @@ namespace TaskbarTempWidget
             dc.DrawGeometry(fillBrush, null, area);
             dc.DrawGeometry(null, linePen, line);
 
-            Point last = new Point(plotWidth, TempY(temps[temps.Length - 1], tempLane));
+            // Fan last, so the temperature's gradient fill does not mute the
+            // dashes. Sharing the lane already costs enough legibility without
+            // handing more of it away to draw order.
+            if (fan.Length >= 2)
+            {
+                StreamGeometry gf = new StreamGeometry();
+                double step = plotWidth / (fan.Length - 1);
+                using (StreamGeometryContext ctx = gf.Open())
+                {
+                    ctx.BeginFigure(new Point(0, FanY(fan[0], lane)), false, false);
+                    for (int i = 1; i < fan.Length; i++)
+                    {
+                        ctx.LineTo(new Point(i * step, FanY(fan[i], lane)), true, false);
+                    }
+                }
+                gf.Freeze();
+                dc.DrawGeometry(null, fanPen, gf);
+            }
+
+            Point last = new Point(plotWidth, TempY(temps[temps.Length - 1], lane));
             dc.DrawEllipse(strokeBrush, ringPen, last, 3.5, 3.5);
         }
     }
@@ -240,8 +258,15 @@ namespace TaskbarTempWidget
         public Block(string label, Color hue)
         {
             Grid g = new Grid();
-            g.ColumnDefinitions.Add(Col(74));
-            g.ColumnDefinitions.Add(Col(152));
+            // Column widths are measured, not guessed. The hero value is 29 px
+            // wide at 19 px Bold ("69°"), and 51 px in the worst case that can
+            // actually render ("100°" plus the alert glyph and its margin), so
+            // 52 px holds the widest content with the gap to the chart down to
+            // 23 px. The 22 px this frees goes to the chart rather than to the
+            // right edge, so the row still totals 288 px and the window keeps
+            // the width and centring that were calibrated against this taskbar.
+            g.ColumnDefinitions.Add(Col(52));
+            g.ColumnDefinitions.Add(Col(174));
             g.ColumnDefinitions.Add(Col(62));
 
             // The text label is what identifies the series, so identity never
@@ -313,9 +338,9 @@ namespace TaskbarTempWidget
     class MainWindow : Window
     {
         // ------------------------------------------------------------------
-        // Position. Run tools/measure-taskbar.ps1 to get these for YOUR
-        // taskbar: the right edge of the Widgets button and the left edge of
-        // Start. The window is centred in that gap.
+        // Horizontal position. Run tools/measure-taskbar.ps1 to get these for
+        // YOUR taskbar: the right edge of the Widgets button and the left edge
+        // of Start. The window is centred in that gap.
         //
         // With a centre-aligned taskbar the Start button drifts left as more
         // apps open, so leave margin on the right.
@@ -364,9 +389,22 @@ namespace TaskbarTempWidget
         // SetWindowPos alone; that needs the uiAccess privilege, which in turn
         // needs a signed binary in a trusted location. Re-asserting topmost is
         // what keeps it drawn, and it has to be frequent: at 2 s the strip
-        // visibly blinked out when Start was pressed, so it runs on its own
-        // 250 ms timer. A SetWindowPos with no move and no resize is close to
-        // free.
+        // visibly blinked out when Start was pressed. A SetWindowPos with no
+        // move and no resize is close to free.
+        //
+        // The demotion was later caught in the act by sampling the z-order:
+        // pressing Start puts explorer's Shell_TrayWnd in front of the strip
+        // about 500 ms later, and it stays in front until the next tick. So
+        // this is a race that can only be recovered from, never won, and the
+        // tick period is the upper bound on how long the strip is buried --
+        // 250 ms was visible, 60 ms is not.
+        //
+        // Reparenting into Shell_TrayWnd would end the race instead of running
+        // it, and does not work here: it was tried on the live window, and a
+        // WS_EX_LAYERED window -- which AllowsTransparency forces -- stops
+        // rendering entirely once it becomes a child. That route requires
+        // giving up the transparent background first.
+        const int TOPMOST_TICK_MS = 60;
         void KeepOnTop()
         {
             IntPtr h = new WindowInteropHelper(this).Handle;
@@ -388,6 +426,15 @@ namespace TaskbarTempWidget
 
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
+            // Transparent, so the acrylic taskbar shows through and the strip
+            // reads as part of it. The cost is ClearType: WPF disables
+            // subpixel antialiasing on layered windows, which is why the font
+            // weights below are one step heavy.
+            //
+            // Opaque is a working alternative -- Ink.Surface is the taskbar's
+            // measured colour and it does restore ClearType -- but it paints a
+            // fixed colour over an acrylic surface that changes with the
+            // wallpaper, so transparency stays the default.
             AllowsTransparency = true;
             ShowInTaskbar = false;
             Topmost = true;
@@ -397,6 +444,8 @@ namespace TaskbarTempWidget
             Width = WIDTH;
             Height = HEIGHT;
 
+            // On the taskbar: the work area stops where the taskbar starts, so
+            // its bottom edge is the strip's top edge.
             double screenH = SystemParameters.PrimaryScreenHeight;
             double workH = SystemParameters.WorkArea.Height;
             Top = (screenH > workH) ? workH : (screenH - HEIGHT);
@@ -453,7 +502,7 @@ namespace TaskbarTempWidget
             timer.Start();
 
             DispatcherTimer topTimer = new DispatcherTimer();
-            topTimer.Interval = TimeSpan.FromMilliseconds(250);
+            topTimer.Interval = TimeSpan.FromMilliseconds(TOPMOST_TICK_MS);
             topTimer.Tick += new EventHandler(OnTopTick);
             topTimer.Start();
 

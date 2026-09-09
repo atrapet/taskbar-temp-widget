@@ -6,10 +6,11 @@
 //
 // Design notes worth keeping:
 //
-//   * Two small multiples, never a dual-axis chart. Temperature (degC) and fan
-//     speed (RPM) are different measures; drawing them against one y-scale
-//     would make their crossings and relative heights meaningless. Each gets
-//     its own lane, separated by a hairline, sharing only the time axis.
+//   * One shared lane, two traces that may cross. Temperature (degC) and fan
+//     speed (% of max RPM) are unrelated measures on independent y-scales, so
+//     an intersection is not itself a data point -- it is read from the shapes
+//     (fan ramping while temperature holds, and so on). The solid filled line
+//     is temperature, the dashed line is the fan; they share the time axis.
 //
 //   * The temperature scale is FIXED at 30-95 degC, not auto-fitted. An
 //     auto-scaled sparkline lies: a flat line at 90 degC looks identical to a
@@ -68,16 +69,18 @@ namespace TaskbarTempWidget
         }
     }
 
-    // Temperature in the upper lane, fan speed as a dashed line in a shorter
-    // lower lane. Same hue for both, since they describe the same component.
+    // Temperature as a filled line, fan speed as a dashed line, both over the
+    // full height and free to cross. Same hue for both, since they describe the
+    // same component; the fill and dash pattern tell them apart.
     class Sparkline : FrameworkElement
     {
         const double TEMP_MIN = 30.0;
         const double TEMP_MAX = 95.0;
         const double TEMP_REF = 80.0;   // reference line, the reading anchor
 
-        const double FAN_LANE = 8.0;
-        const double LANE_GAP = 2.0;
+        // Vertical inset so a trace pinned to the top or bottom of its scale,
+        // and the end dot, are not clipped by the control edge.
+        const double PAD = 4.0;
 
         double[] temps = new double[0];
         double[] fan = new double[0];
@@ -88,7 +91,6 @@ namespace TaskbarTempWidget
         readonly Pen ringPen;
         readonly Pen refPen;
         readonly Pen fanPen;
-        readonly Pen dividerPen;
 
         public Sparkline(Color c)
         {
@@ -127,9 +129,6 @@ namespace TaskbarTempWidget
             fanPen.DashStyle = new DashStyle(new double[] { 3, 2 }, 0);
             fanPen.DashCap = PenLineCap.Flat;
             fanPen.Freeze();
-
-            dividerPen = new Pen(Ink.Gridline, 1.0);
-            dividerPen.Freeze();
         }
 
         // temperatures in degC, fanPercent in 0-100
@@ -147,14 +146,17 @@ namespace TaskbarTempWidget
             return f;
         }
 
-        double TempY(double degC, double laneHeight)
+        // Both series map onto the SAME band: y = top at the maximum, y =
+        // top + plotH at the minimum. The scales are independent (30-95 degC
+        // vs 0-100 % of max RPM), so the traces are free to cross.
+        double TempY(double degC, double top, double plotH)
         {
-            return laneHeight - Clamp01((degC - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * laneHeight;
+            return top + plotH - Clamp01((degC - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * plotH;
         }
 
-        double FanY(double percent, double tempLane, double fanLane)
+        double FanY(double percent, double top, double plotH)
         {
-            return tempLane + LANE_GAP + (fanLane - Clamp01(percent / 100.0) * fanLane);
+            return top + plotH - Clamp01(percent / 100.0) * plotH;
         }
 
         protected override void OnRender(DrawingContext dc)
@@ -164,66 +166,68 @@ namespace TaskbarTempWidget
             if (w <= 0 || h <= 0) { return; }
 
             double plotWidth = w - 5.0;          // room for the end dot
-            double fanLane = FAN_LANE;
-            double tempLane = h - LANE_GAP - fanLane;
-            if (tempLane < 6) { tempLane = h; fanLane = 0; }   // too short to split
+            double top = PAD;
+            double plotH = h - 2 * PAD;
+            if (plotH < 6) { top = 0; plotH = h; }   // too short to inset
 
-            double yRef = TempY(TEMP_REF, tempLane);
+            double yRef = TempY(TEMP_REF, top, plotH);
             dc.DrawLine(refPen, new Point(0, yRef), new Point(w, yRef));
 
-            if (fanLane > 0)
+            // Temperature area + line first, then the fan dashes on top so they
+            // stay legible where they run under the translucent fill or cross
+            // the temperature trace.
+            if (temps.Length >= 2)
             {
-                double yDiv = tempLane + LANE_GAP / 2.0;
-                dc.DrawLine(dividerPen, new Point(0, yDiv), new Point(w, yDiv));
+                StreamGeometry line = new StreamGeometry();
+                StreamGeometry area = new StreamGeometry();
+                double dx = plotWidth / (temps.Length - 1);
+                double baseY = top + plotH;
+
+                using (StreamGeometryContext cl = line.Open())
+                {
+                    using (StreamGeometryContext ca = area.Open())
+                    {
+                        Point first = new Point(0, TempY(temps[0], top, plotH));
+                        cl.BeginFigure(first, false, false);
+                        ca.BeginFigure(new Point(0, baseY), true, true);
+                        ca.LineTo(first, true, false);
+                        for (int i = 1; i < temps.Length; i++)
+                        {
+                            Point p = new Point(i * dx, TempY(temps[i], top, plotH));
+                            cl.LineTo(p, true, true);
+                            ca.LineTo(p, true, false);
+                        }
+                        ca.LineTo(new Point(plotWidth, baseY), true, false);
+                    }
+                }
+                line.Freeze();
+                area.Freeze();
+
+                dc.DrawGeometry(fillBrush, null, area);
+                dc.DrawGeometry(null, linePen, line);
             }
 
-            if (fanLane > 0 && fan.Length >= 2)
+            if (fan.Length >= 2)
             {
                 StreamGeometry gf = new StreamGeometry();
                 double step = plotWidth / (fan.Length - 1);
                 using (StreamGeometryContext ctx = gf.Open())
                 {
-                    ctx.BeginFigure(new Point(0, FanY(fan[0], tempLane, fanLane)), false, false);
+                    ctx.BeginFigure(new Point(0, FanY(fan[0], top, plotH)), false, false);
                     for (int i = 1; i < fan.Length; i++)
                     {
-                        ctx.LineTo(new Point(i * step, FanY(fan[i], tempLane, fanLane)), true, false);
+                        ctx.LineTo(new Point(i * step, FanY(fan[i], top, plotH)), true, false);
                     }
                 }
                 gf.Freeze();
                 dc.DrawGeometry(null, fanPen, gf);
             }
 
-            if (temps.Length < 2) { return; }
-
-            StreamGeometry line = new StreamGeometry();
-            StreamGeometry area = new StreamGeometry();
-            double dx = plotWidth / (temps.Length - 1);
-
-            using (StreamGeometryContext cl = line.Open())
+            if (temps.Length >= 2)
             {
-                using (StreamGeometryContext ca = area.Open())
-                {
-                    Point first = new Point(0, TempY(temps[0], tempLane));
-                    cl.BeginFigure(first, false, false);
-                    ca.BeginFigure(new Point(0, tempLane), true, true);
-                    ca.LineTo(first, true, false);
-                    for (int i = 1; i < temps.Length; i++)
-                    {
-                        Point p = new Point(i * dx, TempY(temps[i], tempLane));
-                        cl.LineTo(p, true, true);
-                        ca.LineTo(p, true, false);
-                    }
-                    ca.LineTo(new Point(plotWidth, tempLane), true, false);
-                }
+                Point last = new Point(plotWidth, TempY(temps[temps.Length - 1], top, plotH));
+                dc.DrawEllipse(strokeBrush, ringPen, last, 3.5, 3.5);
             }
-            line.Freeze();
-            area.Freeze();
-
-            dc.DrawGeometry(fillBrush, null, area);
-            dc.DrawGeometry(null, linePen, line);
-
-            Point last = new Point(plotWidth, TempY(temps[temps.Length - 1], tempLane));
-            dc.DrawEllipse(strokeBrush, ringPen, last, 3.5, 3.5);
         }
     }
 

@@ -1,0 +1,8 @@
+# Build output
+src/Widget.exe
+src/*.pdb
+
+# Runtime data written next to the executable
+src/live.txt
+src/live.tmp
+src/*.log

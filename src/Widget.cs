@@ -346,6 +346,34 @@ namespace TaskbarTempWidget
         [DllImport("user32.dll")]
         static extern int SetWindowLong(IntPtr h, int index, int value);
 
+        [DllImport("user32.dll")]
+        static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+        static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        const uint SWP_NOSIZE = 0x1;
+        const uint SWP_NOMOVE = 0x2;
+        const uint SWP_NOACTIVATE = 0x10;
+
+        // The taskbar is topmost too. Within that band the z-order goes to
+        // whoever called SetWindowPos last, and Explorer re-asserts its own on
+        // every taskbar event -- opening the Start menu is enough. Without this
+        // reminder the strip ends up under the taskbar: still there, still
+        // reported as visible, but not on screen.
+        //
+        // Note that a window cannot be raised *above* the taskbar's band by
+        // SetWindowPos alone; that needs the uiAccess privilege, which in turn
+        // needs a signed binary in a trusted location. Re-asserting topmost is
+        // what keeps it drawn, and it has to be frequent: at 2 s the strip
+        // visibly blinked out when Start was pressed, so it runs on its own
+        // 250 ms timer. A SetWindowPos with no move and no resize is close to
+        // free.
+        void KeepOnTop()
+        {
+            IntPtr h = new WindowInteropHelper(this).Handle;
+            if (h == IntPtr.Zero) { return; }
+            SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
         Block cpu;
         Block gpu;
         Border frame;
@@ -423,6 +451,12 @@ namespace TaskbarTempWidget
             timer.Interval = TimeSpan.FromSeconds(2);
             timer.Tick += new EventHandler(OnTick);
             timer.Start();
+
+            DispatcherTimer topTimer = new DispatcherTimer();
+            topTimer.Interval = TimeSpan.FromMilliseconds(250);
+            topTimer.Tick += new EventHandler(OnTopTick);
+            topTimer.Start();
+
             Refresh();
         }
 
@@ -448,11 +482,17 @@ namespace TaskbarTempWidget
             // not swallow taskbar clicks or steal focus.
             SetWindowLong(h, GWL_EXSTYLE,
                 ex | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
+            KeepOnTop();
         }
 
         void OnTick(object sender, EventArgs e)
         {
             Refresh();
+        }
+
+        void OnTopTick(object sender, EventArgs e)
+        {
+            KeepOnTop();
         }
 
         void Refresh()

@@ -128,6 +128,14 @@ background was safe.
 **State is never colour alone.** Above 80 °C the value gets an amber glyph,
 above 90 °C a red one; the number itself always carries the reading.
 
+**Staying visible needs a nag loop.** The taskbar is topmost too, and within
+that band the z-order goes to whoever called `SetWindowPos` last -- Explorer
+re-asserts its own on every taskbar event, so opening the Start menu is enough
+to bury the strip. A window cannot be raised *above* the taskbar's band by
+`SetWindowPos` at all; that needs the `uiAccess` privilege, which needs a
+signed binary in a trusted location. So the widget re-asserts topmost on its
+own 250 ms timer. At 2 s the strip visibly blinked out when Start was pressed.
+
 ## Limitations
 
 - Hardcoded for a 48 px taskbar at 100 % DPI. Other scalings need the sizes

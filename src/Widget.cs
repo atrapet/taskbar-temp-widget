@@ -49,6 +49,10 @@
 //     always printed as text, and a reference line marks 80 degC, so the chart
 //     is readable without interaction.
 //
+//   * It hides itself while a full-screen application is in front. Being
+//     dependably on top otherwise means being on top of a full-screen video
+//     as well, which nobody wants.
+//
 // Builds with csc.exe from the .NET Framework -- no SDK required. See
 // tools/build.ps1. Written to C# 5 so that compiler accepts it: no string
 // interpolation, no expression-bodied members, no null-conditionals.
@@ -379,6 +383,43 @@ namespace TaskbarTempWidget
         const uint SWP_NOMOVE = 0x2;
         const uint SWP_NOACTIVATE = 0x10;
 
+        // Getting out of the way of anything full-screen.
+        [StructLayout(LayoutKind.Sequential)]
+        struct RECT { public int Left, Top, Right, Bottom; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public int dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        static extern bool GetWindowRect(IntPtr h, out RECT r);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int max);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+
+        [DllImport("user32.dll")]
+        static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO mi);
+
+        [DllImport("user32.dll")]
+        static extern bool ShowWindow(IntPtr h, int cmd);
+
+        const uint MONITOR_DEFAULTTONEAREST = 2;
+        const int SW_HIDE = 0;
+        const int SW_SHOWNOACTIVATE = 4;
+
+        bool hidden;
+
         // The taskbar is topmost too. Within that band the z-order goes to
         // whoever called SetWindowPos last, and Explorer re-asserts its own on
         // every taskbar event -- opening the Start menu is enough. Without this
@@ -409,7 +450,79 @@ namespace TaskbarTempWidget
         {
             IntPtr h = new WindowInteropHelper(this).Handle;
             if (h == IntPtr.Zero) { return; }
+
+            // Being reliably on top means being on top of a full-screen video
+            // too, which is not wanted. Hide instead, and only when the state
+            // actually changes -- this runs 16 times a second.
+            bool shouldHide = FullScreenAppOnOurMonitor(h);
+            if (shouldHide != hidden)
+            {
+                hidden = shouldHide;
+                // ShowWindow rather than WPF's Hide()/Show(): coming back must
+                // not activate the window or it would steal focus from the
+                // very application it was hiding for.
+                ShowWindow(h, hidden ? SW_HIDE : SW_SHOWNOACTIVATE);
+            }
+            if (hidden) { return; }
+
             SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
+        // True when the foreground window covers the whole of the monitor this
+        // strip is on -- the monitor the strip is on, not the foreground
+        // window's own, so a full-screen video on a second screen does not
+        // blank a strip that is perfectly visible on this one.
+        //
+        // The whole check was measured against a build without it, alternating
+        // runs on the same machine: 0.51 % of one core against 0.43 %, where
+        // two runs of the *same* build differed by more than that. So it is
+        // free in practice, and there is no cache here on purpose -- one would
+        // buy nothing measurable and could hold a stale verdict across a
+        // resolution change.
+        //
+        // The two cheap things are worth keeping: one reused buffer instead of
+        // an allocation per tick, and the rectangle test before the class name,
+        // since nearly every window fails the rectangle and never needs it.
+        readonly System.Text.StringBuilder clsBuf = new System.Text.StringBuilder(256);
+
+        bool FullScreenAppOnOurMonitor(IntPtr self)
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero || fg == self) { return false; }
+
+            RECT r;
+            if (!GetWindowRect(fg, out r)) { return false; }
+
+            MONITORINFO mi = new MONITORINFO();
+            mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+            if (!GetMonitorInfo(MonitorFromWindow(self, MONITOR_DEFAULTTONEAREST), ref mi))
+            {
+                return false;
+            }
+
+            // Comparing against the monitor rather than the work area is what
+            // separates full-screen from merely maximised: a maximised window
+            // stops where the taskbar starts, a full-screen one does not. A
+            // maximised window measured -8,-8 to 3448,1400 against a 3440x1440
+            // monitor -- it overhangs on three sides, and only the bottom edge
+            // tells the two apart.
+            if (!(r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top &&
+                  r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom))
+            {
+                return false;
+            }
+
+            // The shell's own surfaces are full-screen at times without any
+            // application being: the desktop, and the Start/Search host.
+            GetClassName(fg, clsBuf, clsBuf.Capacity);
+            string name = clsBuf.ToString();
+            if (name == "Progman" || name == "WorkerW" || name == "Shell_TrayWnd" ||
+                name == "Windows.UI.Core.CoreWindow" || name == "XamlExplorerHostIslandWindow")
+            {
+                return false;
+            }
+
+            return true;
         }
 
         Block cpu;

@@ -155,6 +155,26 @@ location. So the widget re-asserts topmost on its own 60 ms timer, which costs
 later measured at ~72 ms, so the tick period is the upper bound on how long it
 is hidden.
 
+**It hides itself for full-screen applications.** Being dependably on top
+otherwise means being on top of a full-screen video too, which nobody wants. So
+the same 60 ms tick checks whether the foreground window covers the whole of the
+monitor the strip is on, and hides the window with `ShowWindow` when it does —
+`ShowWindow` rather than WPF's `Hide()`/`Show()`, because coming back must not
+activate the window or it would steal focus from the application it was hiding
+for.
+
+Comparing against the monitor rather than the work area is what separates
+full-screen from merely maximised, and the distinction is finer than it looks:
+a maximised window here measures `-8,-8` to `3448,1400` against a 3440x1440
+monitor, so it overhangs on three sides and only the bottom edge — where the
+taskbar starts — tells the two apart. Checking the strip's monitor rather than
+the foreground window's own also means a full-screen video on a second screen
+does not blank a strip that is perfectly visible on this one.
+
+The whole check was measured against a build without it, alternating runs:
+0.51 % of one core against 0.43 %, where two runs of the *same* build differed
+by more than that.
+
 **The Start menu wall — unfixed, and unfixable from here.** *Windows 11 does
 not composite ordinary windows over the taskbar's own rectangle while the Start
 menu is open.* The strip is simply not drawn for as long as the menu is up, and
@@ -193,6 +213,9 @@ itself visible.
   the Start button drifts left as more apps open, so leave margin on the right.
 - Single monitor: it places itself on the primary screen's taskbar.
 - It is not drawn while the Start menu is open. See **The Start menu wall**.
+- It hides itself while a full-screen application is in front, by design. With
+  an auto-hidden taskbar a maximised window would also count as full-screen,
+  since the work area then covers the whole monitor.
 - The `▲` glyph and `°` sign are non-ASCII literals, so `Widget.cs` must keep
   its UTF-8 BOM. `build.ps1` re-adds it before compiling.
 

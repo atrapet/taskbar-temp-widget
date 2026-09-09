@@ -62,8 +62,8 @@ other.
 
 **2. Set your fan maxima.** In `src/sensor-service.ps1`, set `$RpmMaxCpu` and
 `$RpmMaxGpu` to your fans' top speed. Fan speed is published as a percentage of
-maximum so the dashed lane has a stable scale; FanControl's calibration will
-tell you the numbers.
+maximum so the dashed fan line has a stable scale; FanControl's calibration
+will tell you the numbers.
 
 **3. Choose where it sits.** From a normal PowerShell:
 
@@ -98,10 +98,19 @@ Unregister-ScheduledTask -TaskName 'Taskbar Temp Widget - display' -Confirm:$fal
 These are the decisions that took the longest to get right, kept here so
 nobody has to rediscover them.
 
-**No dual-axis chart.** Temperature (°C) and fan speed (RPM) are different
-measures. Drawing them against one y-scale would make their crossings and
-relative heights meaningless — it is the single most common charting mistake.
-Each gets its own lane, separated by a hairline, sharing only the time axis.
+**One lane, two traces that may cross.** Temperature (°C) and fan speed
+(% of max RPM) are different measures. Drawing two series against a shared,
+auto-scaled pair of y-axes is the classic dual-axis mistake: each axis can be
+slid independently, so the crossing point and the relative heights are the
+chart author's choice, not data. This avoids that trap a different way — both
+series are drawn over the full height on *fixed*, independent scales
+(temperature 30–95 °C, fan 0–100 %), so a crossing is never spurious: it just
+means one is rising while the other holds or falls, which is the thing worth
+seeing. The filled line is temperature, the dashed line is the fan.
+
+*(Earlier versions kept the fan in a separate 8 px lane below a hairline. That
+removed any chance of a misleading crossing but left the fan trace with almost
+no vertical resolution; sharing the lane was the better trade.)*
 
 **The temperature scale is fixed at 30–95 °C, not auto-fitted.** An auto-scaled
 sparkline lies: a flat line at 90 °C looks identical to a flat line at 45 °C.

@@ -12,6 +12,12 @@ $fw  = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319'
 $csc = Join-Path $fw 'csc.exe'
 if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
 
+# The widget is normally running, and csc cannot overwrite a loaded image --
+# it reports CS0016, which does not hint at the cause. Say so plainly instead.
+if (Get-Process Widget -ErrorAction SilentlyContinue) {
+    throw 'Widget.exe is running and cannot be overwritten. Stop it first: Get-Process Widget | Stop-Process'
+}
+
 # The source contains non-ASCII literals (the degree sign and a triangle
 # glyph). Without a UTF-8 BOM csc decodes them as ANSI and they render wrong,
 # so make sure the BOM is there before compiling.

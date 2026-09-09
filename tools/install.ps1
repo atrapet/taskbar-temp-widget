@@ -64,10 +64,13 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-Process Widget -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Start-Process -FilePath $ps51 `
-    -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$service`"" `
-    -WindowStyle Hidden
+# Started through the tasks, not with Start-Process, for two reasons: this
+# script runs elevated and a child process would inherit that -- putting the
+# display back into the privileged half that splitting the two was meant to
+# avoid -- and going through the scheduler proves the tasks themselves work
+# rather than just the paths in them.
+Start-ScheduledTask -TaskName 'Taskbar Temp Widget - sensor service'
 Start-Sleep -Seconds 4
-Start-Process -FilePath $widget
+Start-ScheduledTask -TaskName 'Taskbar Temp Widget - display'
 
 Write-Host 'done -- the strip should appear on the taskbar within a few seconds.'

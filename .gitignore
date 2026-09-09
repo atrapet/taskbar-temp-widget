@@ -6,3 +6,6 @@ src/*.pdb
 src/live.txt
 src/live.tmp
 src/*.log
+
+# Machine-specific settings (see docs/config-local.example.ps1)
+src/config.local.ps1

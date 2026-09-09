@@ -24,7 +24,17 @@ $RpmMaxCpu = 1255.0
 $RpmMaxGpu = 3000.0
 
 # Optional: append readings to a CSV for later analysis. Empty string = off.
+# Rows are "ts,label,type,value" and the header is written if the file is new.
+#
+# The type column is not decoration. A fan is exposed twice -- as Fan in rpm
+# and as Control in percent -- so a consumer reading the label alone cannot
+# tell a speed from a command, and would average the two together.
 $CsvLog = ''
+$CsvEveryNTicks = 3     # 3 x 2 s = one CSV sample every 6 s
+
+# Rename series on the way out, for a consumer that expects its own names.
+# Keyed by the role in $Want, after any "@" qualifier is stripped.
+$CsvLabels = @{}
 
 $HistoryPoints  = 90   # 90 points x 2 s = 3 minutes of sparkline
 $IntervalSeconds = 2
@@ -44,6 +54,10 @@ $logFile = Join-Path $PSScriptRoot 'service.log'
 #
 # Names come from LibreHardwareMonitor and vary by motherboard. Run
 # tools/list-sensors.ps1 to print what your machine exposes.
+#
+# Roles must be unique, so a sensor tracked under two types needs two roles.
+# Suffix the second with "@type" -- "cpuFan" and "cpuFan@Control" -- and the
+# CSV writer strips the qualifier, leaving the type column to distinguish them.
 $Want = @{
   'Temperature|Core (Tctl/Tdie)'    = 'cpuTemp'   # AMD package temperature
   'Temperature|CPU'                 = 'socket'    # motherboard CPU socket probe
@@ -53,6 +67,16 @@ $Want = @{
   'Fan|CPU Fan'                     = 'cpuFan'
   'Fan|GPU Fan 1'                   = 'gpuFan'
 }
+
+# Machine-specific settings live beside this script in config.local.ps1, which
+# is untracked: real fan maxima, extra sensors to log, CSV destination. Keeping
+# them out of the committed file is what lets one checkout serve one machine
+# without the two drifting into separate copies again.
+#
+# It is dot-sourced here, after the defaults above, so it can override any of
+# them and extend $Want in place. See docs/config-local.example.ps1.
+$localConfig = Join-Path $PSScriptRoot 'config.local.ps1'
+if (Test-Path $localConfig) { . $localConfig }
 
 try {
     # These three ship next to FanControl's copy of the library and are needed
@@ -81,6 +105,7 @@ try {
     $histGpu = New-Object System.Collections.Generic.List[double]
     $fanCpu  = New-Object System.Collections.Generic.List[double]
     $fanGpu  = New-Object System.Collections.Generic.List[double]
+    $tick    = 0
 
     while ($true) {
         foreach ($hw in $computer.Hardware) {
@@ -89,12 +114,22 @@ try {
         }
 
         $v = @{}
+        # $reads keeps the sensor type alongside each value. $v cannot: it is
+        # keyed by role, and the role is exactly what drops the type.
+        $reads = New-Object System.Collections.Generic.List[object]
         foreach ($hw in $computer.Hardware) {
             foreach ($node in (@($hw) + @($hw.SubHardware))) {
                 foreach ($s in $node.Sensors) {
                     if ($null -eq $s.Value) { continue }
                     $key = $Want["$($s.SensorType)|$($s.Name)"]
-                    if ($key) { $v[$key] = [double]$s.Value }
+                    if ($key) {
+                        $v[$key] = [double]$s.Value
+                        $reads.Add(@{
+                            role  = $key
+                            type  = [string]$s.SensorType
+                            value = [double]$s.Value
+                        })
+                    }
                 }
             }
         }
@@ -140,9 +175,17 @@ try {
         Set-Content -Path $tmpFile -Value $lines -Encoding ASCII
         Move-Item -Path $tmpFile -Destination $outFile -Force
 
-        if ($CsvLog -and (Test-Path $CsvLog)) {
+        $tick++
+        if ($CsvLog -and ($tick % $CsvEveryNTicks) -eq 0) {
+            if (-not (Test-Path $CsvLog)) {
+                Set-Content -Path $CsvLog -Value 'ts,label,type,value' -Encoding UTF8
+            }
             $ts = Get-Date -Format 'HH:mm:ss'
-            $rows = foreach ($k in $v.Keys) { "$ts,$k," + $v[$k].ToString('0.#', $inv) }
+            $rows = foreach ($r in $reads) {
+                $label = ($r.role -replace '@.*$', '')
+                if ($CsvLabels.ContainsKey($label)) { $label = $CsvLabels[$label] }
+                "$ts,$label,$($r.type)," + $r.value.ToString('0.#', $inv)
+            }
             Add-Content -Path $CsvLog -Value $rows -Encoding UTF8
         }
 

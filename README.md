@@ -60,10 +60,16 @@ across types (`GPU Core` exists as both `Temperature` and `Load`, `CPU Fan` as
 both `Fan` and `Control`), and keying on the name alone lets one overwrite the
 other.
 
-**2. Set your fan maxima.** In `src/sensor-service.ps1`, set `$RpmMaxCpu` and
-`$RpmMaxGpu` to your fans' top speed. Fan speed is published as a percentage of
-maximum so the dashed lane has a stable scale; FanControl's calibration will
-tell you the numbers.
+**2. Set your fan maxima.** Set `$RpmMaxCpu` and `$RpmMaxGpu` to your fans' top
+speed. Fan speed is published as a percentage of maximum so the dashed line has
+a stable scale; FanControl's calibration will tell you the numbers.
+
+Rather than editing `src/sensor-service.ps1`, you can copy
+`docs/config-local.example.ps1` to `src/config.local.ps1` and put your values
+there. That file is gitignored and is dot-sourced after the defaults, so it can
+override any setting, extend `$Want` with extra sensors, and point `$CsvLog` at
+a CSV log — which keeps machine-specific values out of the tracked script and
+survives a `git pull`.
 
 **3. Choose where it sits.** From a normal PowerShell:
 

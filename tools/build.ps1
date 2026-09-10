@@ -14,8 +14,13 @@ if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
 
 # The widget is normally running, and csc cannot overwrite a loaded image --
 # it reports CS0016, which does not hint at the cause. Say so plainly instead.
+# An instance in *another* user's session locks the image just the same, and
+# an unelevated Stop-Process cannot touch it -- hence the task, which stops
+# every session's copy at once.
 if (Get-Process Widget -ErrorAction SilentlyContinue) {
-    throw 'Widget.exe is running and cannot be overwritten. Stop it first: Get-Process Widget | Stop-Process'
+    throw ('Widget.exe is running and cannot be overwritten. Stop it first: ' +
+        "Stop-ScheduledTask -TaskName 'Taskbar Temp Widget - display'" +
+        ' (or Get-Process Widget | Stop-Process for this session only)')
 }
 
 # The source contains non-ASCII literals (the degree sign and a triangle

@@ -31,14 +31,28 @@ of the taskbar.
 
 Two processes, deliberately:
 
-| | runs as | job |
-|---|---|---|
-| `sensor-service.ps1` | **elevated** | polls the sensors every 2 s, writes `live.txt` |
-| `Widget.exe` | normal user | reads `live.txt` every 2 s, draws the strip |
+| | runs as | when | job |
+|---|---|---|---|
+| `sensor-service.ps1` | **SYSTEM** | once, at startup | polls the sensors every 2 s, writes `live.txt` |
+| `Widget.exe` | normal user | at every logon, per session | reads `live.txt` every 2 s, draws the strip |
 
 Reading motherboard and CPU sensors needs kernel-level access. Splitting the
 two keeps the privileged part to a single PowerShell script that only ever
 writes one text file, instead of running the whole GUI as administrator.
+
+The split is also what lets several profiles share one strip. Only one process
+may read the sensors — a second `LibreHardwareMonitorLib` fights the first for
+hardware access, and FanControl is a third consumer of the same library — so
+the service belongs to the machine, not to a session: as SYSTEM from boot it
+survives log offs and fast user switching, and cannot be started twice. The
+display is the opposite: one lightweight instance in each interactive session,
+started by a task whose principal is the `Users` group rather than a named
+account, so it fires for whoever signs in.
+
+Because the tasks store an absolute path, the checkout has to be readable by
+every account that can log on. Somewhere like `C:\dev\taskbar-temp-widget`
+works; inside one user's profile does not, unless that profile has been opened
+up to the others — the second user's strip would start and find no `live.txt`.
 
 `live.txt` is written to a temp name and renamed into place, so the widget can
 never read a half-written file. If the newest reading is more than 15 seconds
@@ -88,9 +102,17 @@ centred in that gap.
 .\tools\install.ps1                  # elevated
 ```
 
-`install.ps1` registers two logon tasks — the service with highest privileges
-(so there is no UAC prompt at every logon) and the widget with normal rights —
-and starts both immediately.
+`install.ps1` registers the two tasks and starts both immediately. Neither is
+tied to the account that runs the script: the service is a startup task under
+SYSTEM with highest privileges (so there is no UAC prompt at every logon), and
+the display is a logon task owned by the `Users` group, which runs with normal
+rights in the session of whoever signed in. Installing once therefore covers
+every profile on the machine, including accounts added afterwards.
+
+It ends by printing the age of `live.txt`, the tail of `service.log` and the
+PID and session of each running `Widget.exe` — registering a task without
+error is no evidence that SYSTEM can actually reach the hardware, so the
+script shows the proof rather than claiming success.
 
 To remove it:
 

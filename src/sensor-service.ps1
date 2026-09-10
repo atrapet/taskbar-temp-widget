@@ -4,6 +4,11 @@
 # The widget itself runs unelevated and only reads the text file this writes,
 # so the privileged surface stays as small as possible.
 #
+# One instance per machine, not per session: tools\install.ps1 registers it as
+# SYSTEM at startup so it outlives log offs and cannot be started twice by two
+# open sessions. Two instances would fight over the sensor library, which
+# FanControl reads as well.
+#
 # Requires FanControl (https://github.com/Rem0o/FanControl.Releases) to be
 # installed -- this script borrows the LibreHardwareMonitorLib.dll that ships
 # with it rather than bundling a second copy of the sensor stack.
@@ -195,4 +200,9 @@ try {
 catch {
     "$(Get-Date -Format 's') ERROR: $($_.Exception.GetType().Name): $($_.Exception.Message)" |
         Add-Content $logFile
+    # Non-zero on the way out, so the scheduled task counts as failed and its
+    # restart-on-failure setting applies. Exiting 0 after a crash looks like a
+    # clean stop to the scheduler, which then leaves the strip dark until the
+    # next boot.
+    exit 1
 }

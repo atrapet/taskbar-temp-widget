@@ -243,6 +243,32 @@ open, `Shell_TrayWnd` drops out of the top-level window enumeration
 (`GetTopWindow` + `GW_HWNDNEXT` no longer finds it) while still reporting
 itself visible.
 
+**A sensor can go away on its own, and the diagnosis trap is subtle.** The GPU
+package power reading disappeared mid-session on the machine this was built
+for: `Power|GPU Package` stopped existing in LibreHardwareMonitor, while every
+other GPU sensor — temperature, fan, clocks, loads, voltages — kept reporting
+normally. It was not this code, and not the widget and FanControl fighting over
+the sensor library: with the service stopped and a single consumer left, the
+sensor was still absent, and `nvidia-smi` answered `N/A` for average draw,
+instantaneous draw and even the *static* power limit. A reboot brought it all
+back. What triggered the loss is still unknown — no display driver reset in the
+system log, and the driver had not been updated for months.
+
+The trap is in the shape of the failure: the telemetry goes away **for newly
+started processes only**. A process that had already opened the sensor keeps
+reading correct, varying values from it. Here the service started at boot was
+still publishing 33–120 W a good while after `nvidia-smi` — a fresh process on
+every call — had begun answering `N/A`, and it only stopped when the service
+itself was restarted. So diagnose with a newly started tool, never by reading
+what the long-running service prints, or you will conclude the hardware is
+still answering long after it has stopped answering anyone new.
+
+This is also why a missing field shows `--`. Every field is written on every
+tick, present or not: a value that stops arriving gets marked, instead of
+leaving its last reading on screen to be read as a live one. That is the same
+rule as the `sensors offline` fallback, applied to one value rather than the
+whole feed.
+
 ## Limitations
 
 - Hardcoded for a 48 px taskbar at 100 % DPI. Other scalings need the sizes
@@ -256,6 +282,9 @@ itself visible.
   since the work area then covers the whole monitor.
 - The `▲` glyph and `°` sign are non-ASCII literals, so `Widget.cs` must keep
   its UTF-8 BOM. `build.ps1` re-adds it before compiling.
+- A sensor the driver stops exposing shows as `--` and stays that way until it
+  comes back; nothing here can conjure a reading. See **A sensor can go away on
+  its own** for how that failure looks and how to diagnose it.
 
 ## Licence
 

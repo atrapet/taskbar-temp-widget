@@ -132,18 +132,28 @@ Unregister-ScheduledTask -TaskName 'Taskbar Temp Widget - display' -Confirm:$fal
 These are the decisions that took the longest to get right, kept here so
 nobody has to rediscover them.
 
-**One lane, and yes, that makes it a dual-axis chart.** Temperature (°C) and
-fan speed (RPM) are different measures, so their crossings and relative
-heights genuinely mean nothing — normally the reason not to do this. It was
-chosen anyway, with the cost measured first: across ~80 minutes of real
-readings the two lines fall within 3 px of each other, reading as a single
-band, 4.4 % of the time on the CPU and 20.7 % on the GPU, whose low
-temperature and low fan percentage tend to land at the same height. What it
+**One lane, two traces that may cross.** Temperature (°C) and fan speed
+(% of max RPM) are different measures. Drawing two series against a shared,
+auto-scaled pair of y-axes is the classic dual-axis mistake: each axis can be
+slid independently, so the crossing point and the relative heights are the
+chart author's choice, not data. This avoids that trap a different way — both
+series are drawn over the full height on *fixed*, independent scales
+(temperature 30–95 °C, fan 0–100 %), so a crossing is never spurious: it just
+means one is rising while the other holds or falls, which is the thing worth
+seeing. The filled line is temperature, the dashed line is the fan.
+
+The cost of sharing the lane was measured before settling on it: across ~80
+minutes of real readings the two lines fall within 3 px of each other, reading
+as a single band, 4.4 % of the time on the CPU and 20.7 % on the GPU — whose
+low temperature and low fan percentage tend to land at the same height. What it
 buys is the temperature trace going from 18 px to the chart's full 28 px.
 
-If you would rather have the unambiguous version, give the fan a shorter lane
-of its own under a hairline divider and scale each series to its own height:
-the change is confined to `Sparkline.OnRender` and `FanY`.
+*(Earlier versions kept the fan in a separate 8 px lane below a hairline. That
+removed any chance of a misleading crossing but left the fan trace with almost
+no vertical resolution; sharing the lane was the better trade. To go back to it,
+give the fan a shorter lane of its own under a hairline divider and scale each
+series to its own height: the change is confined to `Sparkline.OnRender` and
+`FanY`.)*
 
 **The temperature scale is fixed at 30–95 °C, not auto-fitted.** An auto-scaled
 sparkline lies: a flat line at 90 °C looks identical to a flat line at 45 °C.

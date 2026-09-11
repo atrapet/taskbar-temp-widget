@@ -61,11 +61,42 @@ foreach ($old in $serviceTask, $displayTask) {
     Unregister-ScheduledTask -TaskName $old -Confirm:$false -ErrorAction SilentlyContinue
 }
 
+# Register-ScheduledTask reports a rejected task definition as a NON-TERMINATING
+# CIM error, which $ErrorActionPreference = 'Stop' does not catch. On
+# 2026-09-11 an out-of-range repetition duration was refused and this script
+# carried on and printed "registered" for a task that no longer existed --
+# having just unregistered the working one. So never trust the call: read the
+# task back.
+function Assert-Registered {
+    param($Name)
+    if (-not (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)) {
+        throw "registration of '$Name' failed -- see the error above. No task is installed."
+    }
+}
+
 # --- sensor service: one instance, as SYSTEM, from boot -------------------
 
 $serviceTrigger = New-ScheduledTaskTrigger -AtStartup
 # A delay lets the sensor drivers finish initialising before we poke them.
 $serviceTrigger.Delay = 'PT30S'
+
+# The second trigger is what actually brings the service back from the dead:
+# a repetition every 5 minutes, indefinitely, which MultipleInstances=IgnoreNew
+# turns into a no-op while the service is alive and into a relaunch when it is
+# not. Restart-on-failure below cannot do this job, measured on 2026-09-11: the
+# service exited 1 and the scheduler still logged "task completed" (event 102),
+# so it never treats a non-zero action exit as a failed task and the restart
+# never fires. It is kept only for the case it does cover -- an action that
+# fails to launch at all.
+#
+# Written as a daily trigger carrying a 24-hour repetition, renewed every day,
+# rather than a single endless one: "-RepetitionDuration ([TimeSpan]::MaxValue)"
+# is the documented way to say "indefinitely" and this build rejects the XML it
+# produces -- "Duration:P99999999DT23H59M59S", value out of range.
+$reviveTrigger = New-ScheduledTaskTrigger -Daily -At (Get-Date).Date
+$reviveTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
+    -RepetitionInterval (New-TimeSpan -Minutes 5) `
+    -RepetitionDuration (New-TimeSpan -Hours 24)).Repetition
 
 $serviceSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -StartWhenAvailable `
@@ -76,12 +107,14 @@ $serviceSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
 Register-ScheduledTask -TaskName $serviceTask `
     -Action (New-ScheduledTaskAction -Execute $ps51 `
         -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $service)) `
-    -Trigger $serviceTrigger `
+    -Trigger $serviceTrigger, $reviveTrigger `
     -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
         -LogonType ServiceAccount -RunLevel Highest) `
     -Settings $serviceSettings `
-    -Description 'Publishes live.txt for the taskbar temperature widget (one instance for the whole machine)' | Out-Null
-Write-Host "  registered: $serviceTask  (SYSTEM, at startup)"
+    -Description 'Publishes live.txt for the taskbar temperature widget (one instance for the whole machine)' `
+    -ErrorAction Stop | Out-Null
+Assert-Registered $serviceTask
+Write-Host "  registered: $serviceTask  (SYSTEM, at startup, revived every 5 min)"
 
 # --- display: one instance per interactive session ------------------------
 
@@ -102,7 +135,9 @@ Register-ScheduledTask -TaskName $displayTask `
     -Trigger $displayTrigger `
     -Principal (New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited) `
     -Settings $displaySettings `
-    -Description 'CPU/GPU temperature strip on the Windows taskbar (every profile, per session)' | Out-Null
+    -Description 'CPU/GPU temperature strip on the Windows taskbar (every profile, per session)' `
+    -ErrorAction Stop | Out-Null
+Assert-Registered $displayTask
 Write-Host "  registered: $displayTask  (any user at logon, per session)"
 
 # --- start both now -------------------------------------------------------

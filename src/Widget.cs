@@ -663,7 +663,24 @@ namespace TaskbarTempWidget
             {
                 if (!File.Exists(dataFile)) { GoOffline(); return; }
 
-                string[] lines = File.ReadAllLines(dataFile);
+                // Opened by hand rather than with File.ReadAllLines, for the
+                // FileShare.Delete flag. The service publishes by renaming a
+                // temp file over this one, and the default share mode forbids
+                // that replacement while the file is open. Both loops run
+                // every 2 s, so they collide sooner or later: on 2026-09-11
+                // the rename lost the race after 1 h 46 and took the service
+                // down with it. Allowing the replacement removes the
+                // collision, instead of leaving the writer to retry it.
+                string[] lines;
+                using (FileStream fs = new FileStream(dataFile, FileMode.Open,
+                           FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader sr = new StreamReader(fs))
+                {
+                    List<string> read = new List<string>();
+                    string line;
+                    while ((line = sr.ReadLine()) != null) { read.Add(line); }
+                    lines = read.ToArray();
+                }
                 Dictionary<string, string> d = new Dictionary<string, string>();
                 for (int i = 0; i < lines.Length; i++)
                 {

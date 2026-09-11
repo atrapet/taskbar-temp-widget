@@ -177,8 +177,34 @@ try {
         )
 
         # Write-then-rename: the widget must never read a half-written file.
+        #
+        # The rename is the one step that can fail through no fault of ours: a
+        # reader holding live.txt without FileShare.Delete blocks the
+        # replacement, and "Impossible de creer un fichier deja existant" is
+        # what comes back. Widget.exe now opens the file in a way that allows
+        # it, but an older build, an editor or a backup agent would bring the
+        # collision back -- so retry briefly, then give up on THIS TICK only.
+        # Losing one publication is invisible; losing the service is not, and
+        # the scheduler will not revive it on a non-zero exit (measured:
+        # a failed action still logs "task completed", so restart-on-failure
+        # never fires). The widget dims itself after 15 s without data.
         Set-Content -Path $tmpFile -Value $lines -Encoding ASCII
-        Move-Item -Path $tmpFile -Destination $outFile -Force
+        $published = $false
+        for ($try = 1; $try -le 5 -and -not $published; $try++) {
+            try {
+                Move-Item -Path $tmpFile -Destination $outFile -Force -ErrorAction Stop
+                $published = $true
+            }
+            catch {
+                if ($try -lt 5) { Start-Sleep -Milliseconds 120 }
+                else {
+                    # Appended, so the startup line survives, and once per
+                    # failed tick rather than once per retry.
+                    "$(Get-Date -Format 's') publish skipped: $($_.Exception.Message)" |
+                        Add-Content $logFile
+                }
+            }
+        }
 
         $tick++
         if ($CsvLog -and ($tick % $CsvEveryNTicks) -eq 0) {

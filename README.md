@@ -109,6 +109,12 @@ the display is a logon task owned by the `Users` group, which runs with normal
 rights in the session of whoever signed in. Installing once therefore covers
 every profile on the machine, including accounts added afterwards.
 
+One consequence of the group principal: a normal user cannot start the display
+task by hand — `Start-ScheduledTask` on it answers *access denied*, since the
+task belongs to the group rather than to them. The logon trigger is unaffected,
+and starting the strip manually is just running `src\Widget.exe`, which is the
+right context anyway: unelevated, in your own session.
+
 It ends by printing the age of `live.txt`, the tail of `service.log` and the
 PID and session of each running `Widget.exe` — registering a task without
 error is no evidence that SYSTEM can actually reach the hardware, so the

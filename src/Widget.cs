@@ -756,18 +756,33 @@ namespace TaskbarTempWidget
                     b.Glyph.Text = "";
                 }
             }
+            else
+            {
+                // Every field below has the same else branch, and it is not
+                // decoration: without it a field is only ever written when the
+                // sensor is present, so a sensor that disappears leaves its
+                // last reading on screen for good -- a frozen number presented
+                // as a live one, the exact thing the offline fallback exists to
+                // avoid. It stopped being hypothetical on 2026-09-11, when the
+                // GPU power reading went away mid-session.
+                b.Value.Text = "--";
+                b.Value.Foreground = Ink.Primary;
+                b.Glyph.Text = "";
+            }
 
             double rpm;
             if (ReadNum(d, prefix + ".rpm", out rpm))
             {
                 b.Rpm.Text = (rpm < 1) ? "idle" : (Math.Round(rpm).ToString(inv) + " rpm");
             }
+            else { b.Rpm.Text = "--"; }
 
             double watts;
             if (ReadNum(d, prefix + ".w", out watts))
             {
                 b.Watt.Text = Math.Round(watts).ToString(inv) + " W";
             }
+            else { b.Watt.Text = "--"; }
 
             b.Chart.SetData(ReadSeries(d, prefix + ".hist"), ReadSeries(d, prefix + ".fan"));
         }
